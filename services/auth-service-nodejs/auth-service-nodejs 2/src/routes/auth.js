@@ -1,0 +1,31 @@
+const express=require('express'); const Joi=require('joi'); const bcrypt=require('bcrypt'); const jwt=require('jsonwebtoken');
+const { findByEmail, findById, createUser, markEmailVerified }=require('../models/user');
+const { signAccessToken, signRefreshToken, rotateRefreshToken, revokeRefreshToken, signEmailVerifyToken, verifyEmailVerifyToken }=require('../utils/tokens');
+const { sendMail }=require('../utils/email'); const { loginLimiter, sensitiveLimiter }=require('../middleware/rateLimits'); const { auth }=require('../middleware/auth');
+const router=express.Router();
+router.post('/register', sensitiveLimiter, async (req,res)=>{ const s=Joi.object({ email:Joi.string().email().required(), password:Joi.string().min(8).required(), name:Joi.string().allow('',null) });
+  const { error, value }=s.validate(req.body||{}); if(error) return res.status(400).json({error:error.details[0].message});
+  const existing=await findByEmail(value.email); if(existing) return res.status(409).json({error:'Email already registered'});
+  const user=await createUser(value); const token=signEmailVerifyToken(user); const link=`${process.env.BASE_URL}/api/v1/auth/verify-email?token=${encodeURIComponent(token)}`;
+  try{ await sendMail({ to:user.email, subject:'Verify your email', html:`<p>Hello ${user.name||''},</p><p><a href="${link}">Verify email</a></p>`, text:`Verify: ${link}` }); }catch(e){}
+  res.status(201).json({ message:'Registered. Please check your email to verify your account.' }); });
+router.post('/login', loginLimiter, async (req,res)=>{ const s=Joi.object({ email:Joi.string().email().required(), password:Joi.string().required() });
+  const { error, value }=s.validate(req.body||{}); if(error) return res.status(400).json({error:error.details[0].message});
+  const user=await findByEmail(value.email); if(!user) return res.status(401).json({error:'Invalid credentials'});
+  const match=await bcrypt.compare(value.password, user.password_hash); if(!match) return res.status(401).json({error:'Invalid credentials'});
+  const access=signAccessToken(user); const { token:refresh }=await signRefreshToken(user); res.json({ accessToken:access, refreshToken:refresh, emailVerified:!!user.is_email_verified, activeOrgId:user.active_org_id }); });
+router.post('/refresh', sensitiveLimiter, async (req,res)=>{ const s=Joi.object({ refreshToken:Joi.string().required() }); const { error, value }=s.validate(req.body||{});
+  if(error) return res.status(400).json({error:error.details[0].message}); try{ const { newToken, user }=await rotateRefreshToken(value.refreshToken); const access=signAccessToken(user); res.json({ accessToken:access, refreshToken:newToken }); }catch(e){ res.status(401).json({error:'Invalid refresh token'}); } });
+router.post('/logout', auth(true), sensitiveLimiter, async (req,res)=>{ const s=Joi.object({ refreshToken:Joi.string().required() }); const { error, value }=s.validate(req.body||{});
+  if(error) return res.status(400).json({error:error.details[0].message}); try{ const p=jwt.verify(value.refreshToken, process.env.JWT_REFRESH_SECRET); await revokeRefreshToken(p.jti); }catch(e){} res.json({ ok:true }); });
+router.post('/resend-verification', sensitiveLimiter, auth(false), async (req,res)=>{ const s=Joi.object({ email:Joi.string().email() }); const { error, value }=s.validate(req.body||{});
+  if(error) return res.status(400).json({error:error.details[0].message}); let user=null; if(req.user) user=await findById(req.user.id); if(!user&&value.email) user=await findByEmail(value.email);
+  if(!user) return res.status(404).json({error:'User not found'}); if(user.is_email_verified) return res.json({message:'Email already verified'});
+  const token=signEmailVerifyToken(user); const link=`${process.env.BASE_URL}/api/v1/auth/verify-email?token=${encodeURIComponent(token)}`;
+  try{ await sendMail({ to:user.email, subject:'Verify your email', html:`<p>Hello ${user.name||''},</p><p><a href="${link}">Verify</a></p>`, text:`Verify: ${link}` }); }catch(e){} res.json({ message:'Verification email sent' }); });
+router.get('/verify-email', async (req,res)=>{ const token=req.query.token; if(!token) return res.status(400).json({error:'Missing token'});
+  try{ const p=verifyEmailVerifyToken(token); const user=await findById(Number(p.sub)); if(!user) return res.status(404).json({error:'User not found'});
+    if(user.is_email_verified) return res.json({message:'Email already verified'}); await markEmailVerified(user.id); res.json({message:'Email verified'}); }
+  catch(e){ res.status(400).json({error:'Invalid or expired token'}); } });
+router.get('/me', auth(true), async (req,res)=>{ const user=await findById(req.user.id); res.json({ id:user.id, email:user.email, name:user.name, phone:user.phone, emailVerified:!!user.is_email_verified, activeOrgId:user.active_org_id }); });
+module.exports=router;

@@ -1,0 +1,33 @@
+CREATE TABLE IF NOT EXISTS users (
+  id BIGSERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name TEXT, phone TEXT,
+  is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  active_org_id BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS organisations (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS user_organisations (
+  user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+  org_id BIGINT REFERENCES organisations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, org_id)
+);
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  jti UUID NOT NULL,
+  token_hash TEXT NOT NULL,
+  is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  replaced_by UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);

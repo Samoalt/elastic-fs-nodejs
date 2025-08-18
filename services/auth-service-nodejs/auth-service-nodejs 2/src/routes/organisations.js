@@ -1,0 +1,13 @@
+const express=require('express'); const Joi=require('joi'); const { auth, requireVerified }=require('../middleware/auth');
+const { createOrg, listUserOrgs, addMemberByEmail, userHasOrg }=require('../models/organisation'); const { setActiveOrg }=require('../models/user');
+const router=express.Router();
+router.post('/', auth(true), requireVerified, async (req,res)=>{ const s=Joi.object({ name:Joi.string().min(2).required() }); const { error, value }=s.validate(req.body||{});
+  if(error) return res.status(400).json({error:error.details[0].message}); const org=await createOrg({ name:value.name, ownerUserId:req.user.id }); res.status(201).json(org); });
+router.get('/', auth(true), async (req,res)=>{ const items=await listUserOrgs(req.user.id); res.json({ items }); });
+router.post('/:id/members', auth(true), requireVerified, async (req,res)=>{ const s=Joi.object({ email:Joi.string().email().required(), role:Joi.string().valid('owner','admin','member').default('member') });
+  const { error, value }=s.validate(req.body||{}); if(error) return res.status(400).json({error:error.details[0].message}); const inOrg=await userHasOrg(req.user.id, Number(req.params.id));
+  if(!inOrg) return res.status(403).json({error:'Not in organisation'}); const uid=await addMemberByEmail(Number(req.params.id), value.email, value.role);
+  if(!uid) return res.status(404).json({error:'User not found to add'}); res.json({ ok:true, userId: uid }); });
+router.post('/:id/switch', auth(true), async (req,res)=>{ const orgId=Number(req.params.id); const inOrg=await userHasOrg(req.user.id, orgId);
+  if(!inOrg) return res.status(403).json({error:'Not in organisation'}); const u=await setActiveOrg(req.user.id, orgId); res.json({ activeOrgId:u.active_org_id }); });
+module.exports=router;
